@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 ### Running it 
 To run the program, pass a grayscale image and its marked image as arguments:
-``bash
+```bash
 python run.py images/tucano_grayscale.png images/tucano_marked.png
 ```
 
