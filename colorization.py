@@ -1,5 +1,7 @@
+from sklearn.preprocessing import normalize
 import cv2
 import numpy as np
+import scipy
 from scipy import sparse
 from scipy.linalg import solve_banded
 from scipy.sparse.linalg import spsolve
@@ -35,41 +37,35 @@ def colorize(input_image, marked_image):
     # _idx is a index mapping. _idx[7,5] -> sparse_idx
     _idx = np.arange(size).reshape(n, m)
 
-
     input_yuv = convert_to_yuv(input_image, is_gray=True)
     marked_yuv = convert_to_yuv(marked_image)
 
     marked_locations, marked_mask = marked_pixels(input_yuv, marked_yuv)
     masked_data = cv2.bitwise_and(marked_image, marked_image, mask=marked_mask)
 
-    # sparse_weights, sparse_idx = affinity_sparse_matrix(input_yuv)
+    sparse_weights, sparse_idx = affinity_sparse_matrix(input_yuv)
 
-    # u = np.zeros((sparse_weights.shape[0]))
-    # v = np.zeros((sparse_weights.shape[0]))
-    # for (x, y) in marked_locations:
-    #     u[sparse_idx[x,y]] = marked_yuv[x,y,1]
-    #     v[sparse_idx[x,y]] = marked_yuv[x,y,2]
+    for idx in [sparse_idx[i, j] for (i, j) in marked_locations]:
+        sparse_weights[idx] = sparse.csr_matrix(([1.0], ([0], [idx])), shape=(1, size))
 
-    # im_weights = np.zeros(input_yuv.shape[:2])
-    # for x in range(n):
-    #     for y in range(m):
-    #         a,b = sparse_idx[(50,100),(x,y)]
-    #         im_weights[x,y] = sparse_weights[a,b]
+    LU = scipy.sparse.linalg.splu(sparse_weights.tocsc())
 
+    u = np.zeros((sparse_weights.shape[0]))
+    v = np.zeros((sparse_weights.shape[0]))
 
-    print('HERE')
-    print(f'shape: {u.shape}, \n shapesparse: {sparse_weights.shape}')
+    for (x, y) in marked_locations:
+        u[sparse_idx[x,y]] = marked_yuv[x,y,1]
+        v[sparse_idx[x,y]] = marked_yuv[x,y,2]
 
-    # new_vals = sparse.linalg.spsolve(sparse_weights, u)
-    # new_vals = sparse.linalg.lsqr(sparse_weights, u)[0]
+    output_image = input_yuv.copy()
 
+    new_vals_u = LU.solve(u)
+    new_vals_v = LU.solve(v)
 
-    #TODO make marked matrix (size x 1)
-    #TODO compute colored optimization
-    #TODO transform optimization into image again
-    # new_vals = linalg.spsolve(A, b)
+    output_image[:,:,1] = new_vals_u.reshape(n,m).astype(np.uint8)
+    output_image[:,:,2] = new_vals_v.reshape(n,m).astype(np.uint8)
 
-    return masked_data
+    return output_image
 
 def marked_pixels(input_image, marked_image):
     ''' Finds out what pixels are marked by subtracting marked from input
@@ -102,17 +98,19 @@ def affinity_around(i,j, intensity):
     intensity_window = intensity[window((i,j), height, width)]
     std = intensity_window.std()
     mean = intensity_window.mean()
-
+    px_sum = intensity_window.sum()
+    px_sum = 1
     affinity_window_matrix = np.zeros(shape=(3,3), dtype=np.float64) #wrs for Neighborhood
 
-    yr = intensity_window[1,1]/255 #center point intensity
+    yr = intensity_window[1,1]/px_sum #center point intensity
     for i in range(window_size):
         for j in range(window_size):
             try:
-                ys = intensity_window[i,j]/255
+                ys = intensity_window[i,j]/px_sum
                 affinity_window_matrix[i,j] = _affinity_function(yr,ys,std)
             except IndexError:
-                affinity_window_matrix[i,j] = 0.0
+                pass
+                # affinity_window_matrix[i,j] = 0.0
     return affinity_window_matrix
 
 def window(point, height, width, size=1):
@@ -128,9 +126,9 @@ def window(point, height, width, size=1):
     return slice(upper_border,bottom_border), slice(left_border,right_border)
 
 def _affinity_function(yr, ys, std):
-    if 2*std**2 < 0.01:
-        return 0.0
-    return np.exp( -(yr - ys)**2/(2*std**2) )
+    if std < 0.01:
+        return 1.0
+    return np.exp( -(yr - ys)**2/(2*(std**2)) )
 
 def affinity_sparse_matrix(yuv):
 
@@ -155,14 +153,15 @@ def affinity_sparse_matrix(yuv):
 
             for k in range(affinity_idx.shape[0]):
                 for l in range(affinity_idx.shape[1]):
-                    if k != l: # when k==l, w=1 (the affinity of center with itself)
+
+                    if k == 1 and l == 1: # when k==l==1, w=1 (the affinity of center with itself)
+                        sparce_weights[center_idx,affinity_idx[k,l]] = 0
+                    else:
                         sparce_weights[center_idx,affinity_idx[k,l]] = -affinity_matrix[k,l]
 
-            if col>10 and col <15 and row >10 and row <15:
-                print(affinity_matrix)
-                print(affinity_idx, affinity_window)
-
-    return sparce_weights, sparse_idx
+    Wn = normalize(sparce_weights, norm='l1', axis=1)
+    Wn[np.arange(size), np.arange(size)] = 1
+    return Wn, sparse_idx
 
 def marked_places(input_image, marked_image):
     ''' Main process of colorization
@@ -205,6 +204,7 @@ def weightmap(point, input_image):
             affinity_window_matrix[i,j] = _affinity_function(yr,ys,std)
 
     plt.matshow(affinity_window_matrix)
+    plt.scatter(x, y, marker='o', s=150 ,c='red')
     plt.show()
 
 class SparseIndex:
