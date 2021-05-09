@@ -1,11 +1,12 @@
-from sklearn.preprocessing import normalize
 import cv2
-import numpy as np
 import scipy
+import matplotlib.pyplot as plt
+import numpy as np
+
 from scipy import sparse
 from scipy.linalg import solve_banded
 from scipy.sparse.linalg import spsolve
-import matplotlib.pyplot as plt
+from sklearn.preprocessing import normalize
 
 def convert_to_yuv(image, is_gray=False):
     if is_gray:
@@ -38,10 +39,9 @@ def colorize(input_image, marked_image):
     _idx = np.arange(size).reshape(n, m)
 
     input_yuv = convert_to_yuv(input_image, is_gray=True)
-    marked_yuv = convert_to_yuv(marked_image)
 
-    marked_locations, marked_mask = marked_pixels(input_yuv, marked_yuv)
-    masked_data = cv2.bitwise_and(marked_image, marked_image, mask=marked_mask)
+    marked_yuv = convert_to_yuv(marked_image)
+    marked_locations, _ = marked_pixels(input_yuv, marked_yuv)
 
     sparse_weights, sparse_idx = affinity_sparse_matrix(input_yuv)
 
@@ -57,13 +57,14 @@ def colorize(input_image, marked_image):
         u[sparse_idx[x,y]] = marked_yuv[x,y,1]
         v[sparse_idx[x,y]] = marked_yuv[x,y,2]
 
+
     output_image = input_yuv.copy()
 
     new_vals_u = LU.solve(u)
     new_vals_v = LU.solve(v)
 
-    output_image[:,:,1] = new_vals_u.reshape(n,m).astype(np.uint8)
-    output_image[:,:,2] = new_vals_v.reshape(n,m).astype(np.uint8)
+    output_image[:,:,1] = new_vals_u.reshape((n,m)).astype(np.uint8)
+    output_image[:,:,2] = new_vals_v.reshape((n,m)).astype(np.uint8)
 
     return output_image
 
@@ -99,18 +100,17 @@ def affinity_around(i,j, intensity):
     std = intensity_window.std()
     mean = intensity_window.mean()
     px_sum = intensity_window.sum()
-    px_sum = 1
-    affinity_window_matrix = np.zeros(shape=(3,3), dtype=np.float64) #wrs for Neighborhood
+    affinity_window_matrix = np.zeros(shape=intensity_window.shape, dtype=np.float64) #wrs for Neighborhood
 
-    yr = intensity_window[1,1]/px_sum #center point intensity
-    for i in range(window_size):
-        for j in range(window_size):
+    yr = intensity_window[1,1]/255 #px_sum #center point intensity
+    for i in range(intensity_window.shape[0]):
+        for j in range(intensity_window.shape[1]):
             try:
-                ys = intensity_window[i,j]/px_sum
+                ys = intensity_window[i,j]/255 #px_sum
                 affinity_window_matrix[i,j] = _affinity_function(yr,ys,std)
             except IndexError:
                 pass
-                # affinity_window_matrix[i,j] = 0.0
+
     return affinity_window_matrix
 
 def window(point, height, width, size=1):
@@ -128,7 +128,8 @@ def window(point, height, width, size=1):
 def _affinity_function(yr, ys, std):
     if std < 0.01:
         return 1.0
-    return np.exp( -(yr - ys)**2/(2*(std**2)) )
+    affinity = np.exp( -1* ((yr - ys)**2)/(2*(std**2)) )
+    return affinity
 
 def affinity_sparse_matrix(yuv):
 
@@ -139,7 +140,7 @@ def affinity_sparse_matrix(yuv):
     size = m*n
 
     sparse_idx = SparseIndex(n,m)
-    sparce_weights = sparse.lil_matrix((size, size))
+    sparse_weights = sparse.lil_matrix((size, size))
 
     for row in range(n):
         for col in range(m):
@@ -153,15 +154,17 @@ def affinity_sparse_matrix(yuv):
 
             for k in range(affinity_idx.shape[0]):
                 for l in range(affinity_idx.shape[1]):
+                    sparse_weights[center_idx,affinity_idx[k,l]] = -affinity_matrix[k,l]
 
-                    if k == 1 and l == 1: # when k==l==1, w=1 (the affinity of center with itself)
-                        sparce_weights[center_idx,affinity_idx[k,l]] = 0
-                    else:
-                        sparce_weights[center_idx,affinity_idx[k,l]] = -affinity_matrix[k,l]
+    # Affinity of a pixel with itself should be 0
+    for i in range(n):
+        for j in range(m):
+            point = sparse_idx[i,j]
+            sparse_weights[point,point] = 0
 
-    Wn = normalize(sparce_weights, norm='l1', axis=1)
-    Wn[np.arange(size), np.arange(size)] = 1
-    return Wn, sparse_idx
+    sparse_weights = normalize(sparse_weights, norm='l1', axis=1)
+    sparse_weights[np.arange(size), np.arange(size)] = 1
+    return sparse_weights, sparse_idx
 
 def marked_places(input_image, marked_image):
     ''' Main process of colorization
@@ -204,6 +207,7 @@ def weightmap(point, input_image):
             affinity_window_matrix[i,j] = _affinity_function(yr,ys,std)
 
     plt.matshow(affinity_window_matrix)
+    plt.colorbar()
     plt.scatter(x, y, marker='o', s=150 ,c='red')
     plt.show()
 
@@ -220,8 +224,8 @@ class SparseIndex:
         x, y = key
 
         if isinstance(x, slice):
-            x_vals = np.arange(*x.indices(self.size))
-            y_vals = np.arange(*y.indices(self.size))
+            x_vals = np.arange(*x.indices(self.size-1))
+            y_vals = np.arange(*y.indices(self.size-1))
 
             indices = []
             for i in x_vals:

@@ -12,8 +12,9 @@ from colorization import (
 
 def show_in_output(image):
      cv2.namedWindow("Output")
-     cv2.imshow("Output", cv2.resize(image, (600, 600)))
-     cv2.resizeWindow('Output', 600,600)
+     cv2.imshow("Output", image)
+     # cv2.imshow("Output", cv2.resize(image, (600, 600)))
+     # cv2.resizeWindow('Output', 600,600)
 
 def mouse_handler(event, x, y, flags, params):
     if event == cv2.EVENT_LBUTTONDOWN:
